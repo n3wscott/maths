@@ -18,6 +18,8 @@ package add
 
 import (
 	"context"
+	"k8s.io/client-go/tools/cache"
+	"knative.dev/pkg/apis/duck"
 
 	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/controller"
@@ -39,11 +41,21 @@ func NewController(
 	addInformer := addinformer.Get(ctx)
 	resultsInformer := resultsinformer.Get(ctx)
 
-	r := &Reconciler{
-		informerFactory: resultsInformer,
-	}
+	r := &Reconciler{}
 	impl := addreconciler.NewImpl(ctx, r)
 	r.tracker = tracker.New(impl.EnqueueKey, controller.GetTrackerLease(ctx))
+
+	cif := &duck.CachedInformerFactory{
+		Delegate: &duck.EnqueueInformerFactory{
+			Delegate: resultsInformer,
+			EventHandler: cache.ResourceEventHandlerFuncs{
+				AddFunc:    r.tracker.OnChanged,
+				UpdateFunc: controller.PassNew(r.tracker.OnChanged),
+			},
+		},
+	}
+
+	r.informerFactory = cif
 
 	logger.Info("Setting up event handlers.")
 

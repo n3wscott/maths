@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	pkgapisduck "knative.dev/pkg/apis/duck"
+	v1 "knative.dev/pkg/apis/duck/v1"
 	"knative.dev/pkg/logging"
 	"knative.dev/pkg/reconciler"
 	"knative.dev/pkg/tracker"
@@ -46,49 +47,15 @@ var _ addreconciler.Interface = (*Reconciler)(nil)
 
 // ReconcileKind implements Interface.ReconcileKind.
 func (r *Reconciler) ReconcileKind(ctx context.Context, o *mathsv1alpha1.Add) reconciler.Event {
-	logger := logging.FromContext(ctx)
-
 	expression := ""
 	result := 0
 
 	for _, op := range o.Spec.Operands {
 		if op.Ref != nil {
-			// Make sure we are tracking the Operand.
-			if err := r.tracker.TrackReference(tracker.Reference{
-				APIVersion: op.Ref.APIVersion,
-				Kind:       op.Ref.Kind,
-				Name:       op.Ref.Name,
-				Namespace:  op.Ref.Namespace,
-			}, o); err != nil {
-				ref := fmt.Sprintf("%s.%s %s/%s", op.Ref.Kind, op.Ref.APIVersion, op.Ref.Namespace, op.Ref.Name)
-				logger.Errorf("Error tracking operand %s: %v", ref, err)
-				o.Status.MarkResultsMissing(ref)
-				return err
-			}
-			gvr, _ := meta.UnsafeGuessKindToResource(
-				schema.FromAPIVersionAndKind(op.Ref.APIVersion, op.Ref.Kind))
-
-			logger.Infof("===> Looking for ducktype Results with gvr: %+v\n", gvr)
-
-			// Get a cached informer.
-			_, lister, err := r.informerFactory.Get(ctx, gvr)
+			rt, err := r.getResults(ctx, o, op.Ref)
 			if err != nil {
 				return err
 			}
-
-			// Get result.
-			obj, err := lister.ByNamespace(op.Ref.Namespace).Get(op.Ref.Name)
-			if err != nil {
-				return err
-			}
-
-			rt, ok := obj.(*duckv1.ResultsType)
-
-			if !ok {
-				return apierrs.NewBadRequest(fmt.Sprintf("%+v (%T) is not an ResultsType", op.Ref, obj))
-			}
-
-			logger.Infof("===> Got Results ducktype: %+v\n", rt.Status)
 
 			if len(expression) == 0 {
 				expression = fmt.Sprintf("(%s)", rt.Status.Expression)
@@ -113,4 +80,43 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, o *mathsv1alpha1.Add) re
 	o.Status.MarkComputed()
 
 	return nil
+}
+
+func (r *Reconciler) getResults(ctx context.Context, o *mathsv1alpha1.Add, ref *v1.KReference) (*duckv1.ResultsType, error) {
+	l := logging.FromContext(ctx)
+
+	refDesc := fmt.Sprintf("%s.%s %s/%s", ref.Kind, ref.APIVersion, ref.Namespace, ref.Name)
+
+	// Make sure we are tracking the Operand.
+	if err := r.tracker.TrackReference(tracker.Reference{
+		APIVersion: ref.APIVersion,
+		Kind:       ref.Kind,
+		Name:       ref.Name,
+		Namespace:  ref.Namespace,
+	}, o); err != nil {
+		l.Errorf("Error tracking operand %s: %v", refDesc, err)
+		return nil, err
+	}
+	gvk := schema.FromAPIVersionAndKind(ref.APIVersion, ref.Kind)
+	gvr, _ := meta.UnsafeGuessKindToResource(gvk)
+
+	l.Infof("===> Looking for ducktype Results with gvr: %+v\n", gvr)
+
+	// Get a cached informer.
+	_, lister, err := r.informerFactory.Get(ctx, gvr)
+	if err != nil {
+		return nil, err
+	}
+	// Get result.
+	obj, err := lister.ByNamespace(ref.Namespace).Get(ref.Name)
+	if err != nil {
+		o.Status.MarkResultsMissing(refDesc)
+		return nil, err
+	}
+
+	rt, ok := obj.(*duckv1.ResultsType)
+	if !ok {
+		return nil, apierrs.NewBadRequest(fmt.Sprintf("%+v (%T) is not an ResultsType", ref, obj))
+	}
+	return rt, nil
 }
