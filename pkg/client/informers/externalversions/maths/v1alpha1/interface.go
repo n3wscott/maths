@@ -26,6 +26,8 @@ import (
 type Interface interface {
 	// Adds returns a AddInformer.
 	Adds() AddInformer
+	// Subtracts returns a SubtractInformer.
+	Subtracts() SubtractInformer
 }
 
 type version struct {
@@ -42,4 +44,9 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 // Adds returns a AddInformer.
 func (v *version) Adds() AddInformer {
 	return &addInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// Subtracts returns a SubtractInformer.
+func (v *version) Subtracts() SubtractInformer {
+	return &subtractInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }

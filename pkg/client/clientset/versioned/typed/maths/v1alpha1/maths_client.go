@@ -27,6 +27,7 @@ import (
 type MathsV1alpha1Interface interface {
 	RESTClient() rest.Interface
 	AddsGetter
+	SubtractsGetter
 }
 
 // MathsV1alpha1Client is used to interact with features provided by the maths.tableflip.dev group.
@@ -36,6 +37,10 @@ type MathsV1alpha1Client struct {
 
 func (c *MathsV1alpha1Client) Adds(namespace string) AddInterface {
 	return newAdds(c, namespace)
+}
+
+func (c *MathsV1alpha1Client) Subtracts(namespace string) SubtractInterface {
+	return newSubtracts(c, namespace)
 }
 
 // NewForConfig creates a new MathsV1alpha1Client for the given config.

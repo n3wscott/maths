@@ -32,6 +32,10 @@ func (c *FakeMathsV1alpha1) Adds(namespace string) v1alpha1.AddInterface {
 	return &FakeAdds{c, namespace}
 }
 
+func (c *FakeMathsV1alpha1) Subtracts(namespace string) v1alpha1.SubtractInterface {
+	return &FakeSubtracts{c, namespace}
+}
+
 // RESTClient returns a RESTClient that is used to communicate
 // with API server by this client implementation.
 func (c *FakeMathsV1alpha1) RESTClient() rest.Interface {

@@ -26,64 +26,59 @@ import (
 // +genclient
 // +genreconciler
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type Add struct {
+type Subtract struct {
 	metav1.TypeMeta `json:",inline"`
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// Spec holds the desired state of the Add (from the client).
+	// Spec holds the desired state of the Subtract (from the client).
 	// +optional
-	Spec AddSpec `json:"spec,omitempty"`
+	Spec SubtractSpec `json:"spec,omitempty"`
 
-	// Status communicates the observed state of the Add (from the controller).
+	// Status communicates the observed state of the Subtract (from the controller).
 	// +optional
-	Status AddStatus `json:"status,omitempty"`
+	Status SubtractStatus `json:"status,omitempty"`
 }
 
 var (
-	// Check that Add can be validated and defaulted.
-	_ apis.Validatable   = (*Add)(nil)
-	_ apis.Defaultable   = (*Add)(nil)
-	_ kmeta.OwnerRefable = (*Add)(nil)
+	// Check that Subtract can be validated and defaulted.
+	_ apis.Validatable   = (*Subtract)(nil)
+	_ apis.Defaultable   = (*Subtract)(nil)
+	_ kmeta.OwnerRefable = (*Subtract)(nil)
 	// Check that the type conforms to the duck Knative Resource shape.
-	_ duckv1.KRShaped = (*Add)(nil)
+	_ duckv1.KRShaped = (*Subtract)(nil)
 )
 
-// AddSpec holds the desired state of the Add (from the client).
-type AddSpec struct {
-	Operands []Operand `json:"add"`
-}
-
-type Operand struct {
-	Ref   *duckv1.KReference `json:"ref,omitempty"`
-	Value *int               `json:"value,omitempty"`
+// SubtractSpec holds the desired state of the Subtract (from the client).
+type SubtractSpec struct {
+	Operands []Operand `json:"sub"`
 }
 
 const (
-	// AddConditionReady is set when the revision is starting to materialize
+	// SubtractConditionReady is set when the revision is starting to materialize
 	// runtime resources, and becomes true when those resources are ready.
-	AddConditionReady = apis.ConditionReady
+	SubtractConditionReady = apis.ConditionReady
 )
 
-// AddStatus communicates the observed state of the Add (from the controller).
-type AddStatus struct {
+// SubtractStatus communicates the observed state of the Subtract (from the controller).
+type SubtractStatus struct {
 	duckv1.Status `json:",inline"`
 
 	Expression string `json:"expression,omitempty"`
 	Result     int    `json:"result"`
 }
 
-// AddList is a list of Add resources
+// SubtractList is a list of Subtract resources
 //
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type AddList struct {
+type SubtractList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata"`
 
-	Items []Add `json:"items"`
+	Items []Subtract `json:"items"`
 }
 
 // GetStatus retrieves the status of the resource. Implements the KRShaped interface.
-func (a *Add) GetStatus() *duckv1.Status {
+func (a *Subtract) GetStatus() *duckv1.Status {
 	return &a.Status.Status
 }

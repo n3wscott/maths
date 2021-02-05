@@ -55,6 +55,8 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 	// Group=maths.tableflip.dev, Version=v1alpha1
 	case v1alpha1.SchemeGroupVersion.WithResource("adds"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Maths().V1alpha1().Adds().Informer()}, nil
+	case v1alpha1.SchemeGroupVersion.WithResource("subtracts"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Maths().V1alpha1().Subtracts().Informer()}, nil
 
 	}
 

@@ -19,6 +19,7 @@ package main
 import (
 	// The set of controllers this controller process runs.
 	"tableflip.dev/maths/pkg/reconciler/add"
+	"tableflip.dev/maths/pkg/reconciler/subtract"
 
 	// This defines the shared main for injected controllers.
 	"knative.dev/pkg/injection/sharedmain"
@@ -27,5 +28,6 @@ import (
 func main() {
 	sharedmain.Main("controller",
 		add.NewController,
+		subtract.NewController,
 	)
 }

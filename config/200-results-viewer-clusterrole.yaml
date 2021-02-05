@@ -41,6 +41,8 @@ rules:
   resources:
   - add
   - add/status
+  - subtract
+  - subtract/status
   verbs:
   - get
   - list

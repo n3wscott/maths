@@ -34,5 +34,5 @@ rules:
     resources: ["customresourcedefinitions"]
     verbs: ["get", "list", "create", "update", "delete", "patch", "watch"]
   - apiGroups: ["maths.tableflip.dev"]
-    resources: ["adds", "adds/status"]
+    resources: ["*"]
     verbs: ["get", "list", "create", "update", "delete", "patch", "watch"]

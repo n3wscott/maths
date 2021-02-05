@@ -25,3 +25,11 @@ type AddListerExpansion interface{}
 // AddNamespaceListerExpansion allows custom methods to be added to
 // AddNamespaceLister.
 type AddNamespaceListerExpansion interface{}
+
+// SubtractListerExpansion allows custom methods to be added to
+// SubtractLister.
+type SubtractListerExpansion interface{}
+
+// SubtractNamespaceListerExpansion allows custom methods to be added to
+// SubtractNamespaceLister.
+type SubtractNamespaceListerExpansion interface{}

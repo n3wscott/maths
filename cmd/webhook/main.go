@@ -40,7 +40,8 @@ import (
 
 var types = map[schema.GroupVersionKind]resourcesemantics.GenericCRD{
 	// List the types to validate.
-	v1alpha1.SchemeGroupVersion.WithKind("Add"): &v1alpha1.Add{},
+	v1alpha1.SchemeGroupVersion.WithKind("Add"):      &v1alpha1.Add{},
+	v1alpha1.SchemeGroupVersion.WithKind("Subtract"): &v1alpha1.Subtract{},
 }
 
 var callbacks = map[schema.GroupVersionKind]validation.Callback{}

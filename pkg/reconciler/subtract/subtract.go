@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package add
+package subtract
 
 import (
 	"context"
@@ -30,11 +30,11 @@ import (
 	"knative.dev/pkg/tracker"
 	duckv1 "tableflip.dev/maths/pkg/apis/duck/v1"
 	mathsv1alpha1 "tableflip.dev/maths/pkg/apis/maths/v1alpha1"
-	addreconciler "tableflip.dev/maths/pkg/client/injection/reconciler/maths/v1alpha1/add"
+	subtractreconciler "tableflip.dev/maths/pkg/client/injection/reconciler/maths/v1alpha1/subtract"
 )
 
-// Reconciler implements addreconciler.Interface for
-// Add resources.
+// Reconciler implements substractreconciler.Interface for
+// Subtract resources.
 type Reconciler struct {
 	// Tracker builds an index of what resources are watching other resources
 	// so that we can immediately react to changes tracked resources.
@@ -43,10 +43,10 @@ type Reconciler struct {
 }
 
 // Check that our Reconciler implements Interface
-var _ addreconciler.Interface = (*Reconciler)(nil)
+var _ subtractreconciler.Interface = (*Reconciler)(nil)
 
 // ReconcileKind implements Interface.ReconcileKind.
-func (r *Reconciler) ReconcileKind(ctx context.Context, o *mathsv1alpha1.Add) reconciler.Event {
+func (r *Reconciler) ReconcileKind(ctx context.Context, o *mathsv1alpha1.Subtract) reconciler.Event {
 	expression := ""
 	result := 0
 
@@ -59,17 +59,19 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, o *mathsv1alpha1.Add) re
 
 			if len(expression) == 0 {
 				expression = fmt.Sprintf("(%s)", rt.Status.Expression)
+				result = rt.Status.Result
 			} else {
-				expression = fmt.Sprintf("%s + (%s)", expression, rt.Status.Expression)
+				expression = fmt.Sprintf("%s - (%s)", expression, rt.Status.Expression)
+				result = result - rt.Status.Result
 			}
-			result = result + rt.Status.Result
 		} else if op.Value != nil {
 			if len(expression) == 0 {
 				expression = fmt.Sprintf("%d", *op.Value)
+				result = *op.Value
 			} else {
-				expression = fmt.Sprintf("%s + %d", expression, *op.Value)
+				expression = fmt.Sprintf("%s - %d", expression, *op.Value)
+				result = result - *op.Value
 			}
-			result = result + *op.Value
 		}
 
 	}
@@ -82,7 +84,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, o *mathsv1alpha1.Add) re
 	return nil
 }
 
-func (r *Reconciler) getResults(ctx context.Context, o *mathsv1alpha1.Add, ref *v1.KReference) (*duckv1.ResultsType, error) {
+func (r *Reconciler) getResults(ctx context.Context, o *mathsv1alpha1.Subtract, ref *v1.KReference) (*duckv1.ResultsType, error) {
 	l := logging.FromContext(ctx)
 
 	refDesc := fmt.Sprintf("%s.%s %s/%s", ref.Kind, ref.APIVersion, ref.Namespace, ref.Name)
