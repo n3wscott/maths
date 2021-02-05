@@ -56,8 +56,8 @@ type AddSpec struct {
 }
 
 type Operand struct {
-	Ref   duckv1.KReference `json:"ref"`
-	Value int               `json:"value"`
+	Ref   *duckv1.KReference `json:"ref,omitempty"`
+	Value *int               `json:"value,omitempty"`
 }
 
 const (

@@ -14,21 +14,19 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package addressableservice
+package add
 
 import (
 	"context"
 
-	"knative.dev/pkg/tracker"
-
-	corev1 "k8s.io/api/core/v1"
 	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/logging"
+	"knative.dev/pkg/tracker"
 
-	svcinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/service"
-	addressableserviceinformer "knative.dev/sample-controller/pkg/client/injection/informers/samples/v1alpha1/addressableservice"
-	addressableservicereconciler "knative.dev/sample-controller/pkg/client/injection/reconciler/samples/v1alpha1/addressableservice"
+	resultsinformer "tableflip.dev/maths/pkg/client/injection/ducks/duck/v1/results"
+	addinformer "tableflip.dev/maths/pkg/client/injection/informers/maths/v1alpha1/add"
+	addreconciler "tableflip.dev/maths/pkg/client/injection/reconciler/maths/v1alpha1/add"
 )
 
 // NewController creates a Reconciler and returns the result of NewImpl.
@@ -38,28 +36,18 @@ func NewController(
 ) *controller.Impl {
 	logger := logging.FromContext(ctx)
 
-	addressableserviceInformer := addressableserviceinformer.Get(ctx)
-	svcInformer := svcinformer.Get(ctx)
+	addInformer := addinformer.Get(ctx)
+	resultsInformer := resultsinformer.Get(ctx)
 
 	r := &Reconciler{
-		ServiceLister: svcInformer.Lister(),
+		informerFactory: resultsInformer,
 	}
-	impl := addressableservicereconciler.NewImpl(ctx, r)
-	r.Tracker = tracker.New(impl.EnqueueKey, controller.GetTrackerLease(ctx))
+	impl := addreconciler.NewImpl(ctx, r)
+	r.tracker = tracker.New(impl.EnqueueKey, controller.GetTrackerLease(ctx))
 
 	logger.Info("Setting up event handlers.")
 
-	addressableserviceInformer.Informer().AddEventHandler(controller.HandleAll(impl.Enqueue))
-
-	svcInformer.Informer().AddEventHandler(controller.HandleAll(
-		// Call the tracker's OnChanged method, but we've seen the objects
-		// coming through this path missing TypeMeta, so ensure it is properly
-		// populated.
-		controller.EnsureTypeMeta(
-			r.Tracker.OnChanged,
-			corev1.SchemeGroupVersion.WithKind("Service"),
-		),
-	))
+	addInformer.Informer().AddEventHandler(controller.HandleAll(impl.Enqueue))
 
 	return impl
 }

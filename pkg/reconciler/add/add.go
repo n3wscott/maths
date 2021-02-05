@@ -14,22 +14,22 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package addressableservice
+package add
 
 import (
 	"context"
+	"fmt"
 
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
-	corev1listers "k8s.io/client-go/listers/core/v1"
-
-	"knative.dev/pkg/apis"
-	duckv1 "knative.dev/pkg/apis/duck/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	pkgapisduck "knative.dev/pkg/apis/duck"
 	"knative.dev/pkg/logging"
-	"knative.dev/pkg/network"
 	"knative.dev/pkg/reconciler"
 	"knative.dev/pkg/tracker"
-	samplesv1alpha1 "knative.dev/sample-controller/pkg/apis/samples/v1alpha1"
-	addressableservicereconciler "knative.dev/sample-controller/pkg/client/injection/reconciler/samples/v1alpha1/addressableservice"
+	duckv1 "tableflip.dev/maths/pkg/apis/duck/v1"
+	mathsv1alpha1 "tableflip.dev/maths/pkg/apis/maths/v1alpha1"
+	addreconciler "tableflip.dev/maths/pkg/client/injection/reconciler/maths/v1alpha1/add"
 )
 
 // Reconciler implements addressableservicereconciler.Interface for
@@ -37,46 +37,78 @@ import (
 type Reconciler struct {
 	// Tracker builds an index of what resources are watching other resources
 	// so that we can immediately react to changes tracked resources.
-	Tracker tracker.Interface
-
-	// Listers index properties about resources
-	ServiceLister corev1listers.ServiceLister
+	tracker         tracker.Interface
+	informerFactory pkgapisduck.InformerFactory
 }
 
 // Check that our Reconciler implements Interface
-var _ addressableservicereconciler.Interface = (*Reconciler)(nil)
+var _ addreconciler.Interface = (*Reconciler)(nil)
 
 // ReconcileKind implements Interface.ReconcileKind.
-func (r *Reconciler) ReconcileKind(ctx context.Context, o *samplesv1alpha1.AddressableService) reconciler.Event {
+func (r *Reconciler) ReconcileKind(ctx context.Context, o *mathsv1alpha1.Add) reconciler.Event {
 	logger := logging.FromContext(ctx)
 
-	if err := r.Tracker.TrackReference(tracker.Reference{
-		APIVersion: "v1",
-		Kind:       "Service",
-		Name:       o.Spec.ServiceName,
-		Namespace:  o.Namespace,
-	}, o); err != nil {
-		logger.Errorf("Error tracking service %s: %v", o.Spec.ServiceName, err)
-		return err
+	expression := ""
+	result := 0
+
+	for _, op := range o.Spec.Operands {
+		if op.Ref != nil {
+			// Make sure we are tracking the Operand.
+			if err := r.tracker.TrackReference(tracker.Reference{
+				APIVersion: op.Ref.APIVersion,
+				Kind:       op.Ref.Kind,
+				Name:       op.Ref.Name,
+				Namespace:  op.Ref.Namespace,
+			}, o); err != nil {
+				ref := fmt.Sprintf("%s.%s %s/%s", op.Ref.Kind, op.Ref.APIVersion, op.Ref.Namespace, op.Ref.Name)
+				logger.Errorf("Error tracking operand %s: %v", ref, err)
+				o.Status.MarkResultsMissing(ref)
+				return err
+			}
+			gvr, _ := meta.UnsafeGuessKindToResource(
+				schema.FromAPIVersionAndKind(op.Ref.APIVersion, op.Ref.Kind))
+
+			// Get a cached informer.
+			_, lister, err := r.informerFactory.Get(ctx, gvr)
+			if err != nil {
+				return err
+			}
+
+			// Get result.
+			obj, err := lister.ByNamespace(op.Ref.Namespace).Get(op.Ref.Name)
+			if err != nil {
+				return err
+			}
+
+			rt, ok := obj.(*duckv1.ResultsType)
+
+			logger.Infof("Got Results ducktype: %#v\n", rt)
+
+			if !ok {
+				return apierrs.NewBadRequest(fmt.Sprintf("%+v (%T) is not an ResultsType", op.Ref, obj))
+			}
+
+			if len(expression) == 0 {
+				expression = fmt.Sprintf("(%s)", rt.Status.Expression)
+			} else {
+				expression = fmt.Sprintf("%s + (%s)", expression, rt.Status.Expression)
+			}
+			result = result + rt.Status.Result
+		} else if op.Value != nil {
+			if len(expression) == 0 {
+				expression = fmt.Sprintf("%d", *op.Value)
+			} else {
+				expression = fmt.Sprintf("%s + %d", expression, *op.Value)
+			}
+			result = result + *op.Value
+		}
+
 	}
 
-	_, err := r.ServiceLister.Services(o.Namespace).Get(o.Spec.ServiceName)
-	if apierrs.IsNotFound(err) {
-		logger.Info("Service does not yet exist:", o.Spec.ServiceName)
-		o.Status.MarkServiceUnavailable(o.Spec.ServiceName)
-		return nil
-	} else if err != nil {
-		logger.Errorf("Error reconciling service %s: %v", o.Spec.ServiceName, err)
-		return err
-	}
+	o.Status.Expression = expression
+	o.Status.Result = result
 
-	o.Status.MarkServiceAvailable()
-	o.Status.Address = &duckv1.Addressable{
-		URL: &apis.URL{
-			Scheme: "http",
-			Host:   network.GetServiceHostname(o.Spec.ServiceName, o.Namespace),
-		},
-	}
+	o.Status.MarkComputed()
 
 	return nil
 }

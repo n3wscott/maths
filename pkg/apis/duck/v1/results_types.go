@@ -62,17 +62,17 @@ var (
 )
 
 // GetFullType implements duck.Implementable
-func (*ResultsType) GetFullType() ducktypes.Populatable {
+func (*Results) GetFullType() ducktypes.Populatable {
 	return &ResultsType{}
 }
 
 // ConvertTo implements apis.Convertible
-func (a *ResultsType) ConvertTo(ctx context.Context, to apis.Convertible) error {
+func (a *Results) ConvertTo(ctx context.Context, to apis.Convertible) error {
 	return fmt.Errorf("v1 is the highest known version, got: %T", to)
 }
 
 // ConvertFrom implements apis.Convertible
-func (a *ResultsType) ConvertFrom(ctx context.Context, from apis.Convertible) error {
+func (a *Results) ConvertFrom(ctx context.Context, from apis.Convertible) error {
 	return fmt.Errorf("v1 is the highest known version, got: %T", from)
 }
 

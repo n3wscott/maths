@@ -15,5 +15,5 @@ limitations under the License.
 */
 
 // +k8s:deepcopy-gen=package
-// +groupName=samples.knative.dev
+// +groupName=maths.tableflip.dev
 package v1alpha1
