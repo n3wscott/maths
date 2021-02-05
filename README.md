@@ -37,6 +37,7 @@ metadata:
   name: add-refs
 spec:
   add:
+    - value: 1
     - ref:
         name: add-one
         namespace: default
@@ -48,4 +49,10 @@ spec:
         kind: Add
         apiVersion: maths.tableflip.dev/v1alpha1
 EOF
+```
+
+```
+kubectl delete add add-one
+kubectl delete add add-few
+kubectl delete add add-refs
 ```

@@ -68,6 +68,8 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, o *mathsv1alpha1.Add) re
 			gvr, _ := meta.UnsafeGuessKindToResource(
 				schema.FromAPIVersionAndKind(op.Ref.APIVersion, op.Ref.Kind))
 
+			logger.Infof("===> Looking for ducktype Results with gvr: %+v\n", gvr)
+
 			// Get a cached informer.
 			_, lister, err := r.informerFactory.Get(ctx, gvr)
 			if err != nil {
@@ -82,11 +84,11 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, o *mathsv1alpha1.Add) re
 
 			rt, ok := obj.(*duckv1.ResultsType)
 
-			logger.Infof("Got Results ducktype: %#v\n", rt)
-
 			if !ok {
 				return apierrs.NewBadRequest(fmt.Sprintf("%+v (%T) is not an ResultsType", op.Ref, obj))
 			}
+
+			logger.Infof("===> Got Results ducktype: %+v\n", rt.Status)
 
 			if len(expression) == 0 {
 				expression = fmt.Sprintf("(%s)", rt.Status.Expression)

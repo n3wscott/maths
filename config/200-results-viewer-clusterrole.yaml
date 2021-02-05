@@ -39,7 +39,8 @@ rules:
 - apiGroups:
   - maths.tableflip.dev
   resources:
-  - adds
+  - add
+  - add/status
   verbs:
   - get
   - list

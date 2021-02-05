@@ -51,7 +51,7 @@ type ResultsType struct {
 }
 
 type ResultsStatus struct {
-	Results `json:"inline,omitempty"`
+	Results `json:",inline"`
 }
 
 // Verify AddressableType resources meet duck contracts.
