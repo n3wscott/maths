@@ -30,9 +30,9 @@ rules: [] # Rules are automatically filled in by the controller manager.
 kind: ClusterRole
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: results-viewer
+  name: results-viewer-maths
   labels:
-    aths.tableflip.dev/release: devel
+    maths.tableflip.dev/release: devel
     duck.tableflip.dev/results: "true"
 # Do not use this role directly. These rules will be added to the "results-viewer" role.
 rules:
