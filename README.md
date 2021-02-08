@@ -75,12 +75,14 @@ EOF
 
 
 ```
+cat <<EOF | kubectl apply -f -
 apiVersion: tgik.tgik.io/v1
 kind: Square
 metadata:
   name: demo
 spec:
   base: 5
+EOF
 ```
 
 ```
@@ -103,7 +105,7 @@ spec:
         kind: Add
         apiVersion: maths.tableflip.dev/v1alpha1
     - ref:
-        name: demo
+        name: square-sample
         namespace: default
         kind: Square
         apiVersion: tgik.tgik.io/v1
