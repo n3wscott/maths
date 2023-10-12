@@ -22,15 +22,17 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/markbates/inflect"
+	"github.com/gobuffalo/flect"
 	"go.uber.org/zap"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	admissionlisters "k8s.io/client-go/listers/admissionregistration/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
+
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/kmp"
 	"knative.dev/pkg/logging"
@@ -98,22 +100,76 @@ func (ac *reconciler) Reconcile(ctx context.Context, key string) error {
 func (ac *reconciler) reconcileValidatingWebhook(ctx context.Context, caCert []byte) error {
 	logger := logging.FromContext(ctx)
 
-	rules := make([]admissionregistrationv1.RuleWithOperations, 0, len(ac.handlers))
-	for gvk := range ac.handlers {
-		plural := strings.ToLower(inflect.Pluralize(gvk.Kind))
+	rules := make([]admissionregistrationv1.RuleWithOperations, 0, len(ac.handlers)+len(ac.callbacks))
+	for gvk, config := range ac.handlers {
+		plural := strings.ToLower(flect.Pluralize(gvk.Kind))
 
+		// If SupportedVerbs has not been given, provide the legacy defaults
+		// of Create, Update, and Delete
+		supportedVerbs := []admissionregistrationv1.OperationType{
+			admissionregistrationv1.Create,
+			admissionregistrationv1.Update,
+			admissionregistrationv1.Delete,
+		}
+
+		if vl, ok := config.(resourcesemantics.VerbLimited); ok {
+			logging.FromContext(ctx).Debugf("Using custom Verbs")
+			supportedVerbs = vl.SupportedVerbs()
+		}
+		logging.FromContext(ctx).Debugf("Registering verbs: %s", supportedVerbs)
+
+		resources := []string{}
+		// If SupportedSubResources has not been given, provide the legacy
+		// defaults of main resource, and status
+		if srl, ok := config.(resourcesemantics.SubResourceLimited); ok {
+			logging.FromContext(ctx).Debugf("Using custom SubResources")
+			for _, subResource := range srl.SupportedSubResources() {
+				if subResource == "" {
+					// Special case the actual plural if given
+					resources = append(resources, plural)
+				} else {
+					resources = append(resources, plural+subResource)
+				}
+			}
+		} else {
+			resources = append(resources, plural, plural+"/status")
+		}
+		logging.FromContext(ctx).Debugf("Registering SubResources: %s", resources)
 		rules = append(rules, admissionregistrationv1.RuleWithOperations{
-			Operations: []admissionregistrationv1.OperationType{
-				admissionregistrationv1.Create,
-				admissionregistrationv1.Update,
-				admissionregistrationv1.Delete,
-			},
+			Operations: supportedVerbs,
 			Rule: admissionregistrationv1.Rule{
 				APIGroups:   []string{gvk.Group},
 				APIVersions: []string{gvk.Version},
-				Resources:   []string{plural, plural + "/status"},
+				Resources:   resources,
 			},
 		})
+	}
+	for gvk, callback := range ac.callbacks {
+		if _, ok := ac.handlers[gvk]; ok {
+			continue
+		}
+		plural := strings.ToLower(flect.Pluralize(gvk.Kind))
+		resources := []string{plural, plural + "/status"}
+
+		verbs := make([]admissionregistrationv1.OperationType, 0, len(callback.supportedVerbs))
+		for verb := range callback.supportedVerbs {
+			verbs = append(verbs, admissionregistrationv1.OperationType(verb))
+		}
+		// supportedVerbs is a map which doesn't provide a stable order in for loops.
+		sort.Slice(verbs, func(i, j int) bool { return string(verbs[i]) < string(verbs[j]) })
+
+		rules = append(rules, admissionregistrationv1.RuleWithOperations{
+			Operations: verbs,
+			Rule: admissionregistrationv1.Rule{
+				APIGroups:   []string{gvk.Group},
+				APIVersions: []string{gvk.Version},
+				Resources:   resources,
+			},
+		})
+	}
+
+	for _, r := range rules {
+		logging.FromContext(ctx).Debugf("Rule: %+v", r)
 	}
 
 	// Sort the rules by Group, Version, Kind so that things are deterministically ordered.
@@ -135,9 +191,13 @@ func (ac *reconciler) reconcileValidatingWebhook(ctx context.Context, caCert []b
 
 	current := configuredWebhook.DeepCopy()
 
-	// Clear out any previous (bad) OwnerReferences.
-	// See: https://github.com/knative/serving/issues/5845
-	current.OwnerReferences = nil
+	// Set the owner to namespace.
+	ns, err := ac.client.CoreV1().Namespaces().Get(ctx, system.Namespace(), metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to fetch namespace: %w", err)
+	}
+	nsRef := *metav1.NewControllerRef(ns, corev1.SchemeGroupVersion.WithKind("Namespace"))
+	current.OwnerReferences = []metav1.OwnerReference{nsRef}
 
 	for i, wh := range current.Webhooks {
 		if wh.Name != current.Name {

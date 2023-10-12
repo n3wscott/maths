@@ -22,7 +22,7 @@ import (
 	"k8s.io/gengo/generator"
 	"k8s.io/gengo/namer"
 	"k8s.io/gengo/types"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 // reconcilerControllerGenerator produces a file for setting up the reconciler
@@ -38,7 +38,7 @@ type reconcilerControllerGenerator struct {
 	schemePkg           string
 	informerPackagePath string
 
-	reconcilerClass    string
+	reconcilerClasses  []string
 	hasReconcilerClass bool
 	hasStatus          bool
 }
@@ -69,7 +69,7 @@ func (g *reconcilerControllerGenerator) GenerateType(c *generator.Context, t *ty
 	m := map[string]interface{}{
 		"type":      t,
 		"group":     g.groupName,
-		"class":     g.reconcilerClass,
+		"classes":   g.reconcilerClasses,
 		"hasClass":  g.hasReconcilerClass,
 		"hasStatus": g.hasStatus,
 		"controllerImpl": c.Universe.Type(types.Name{
@@ -80,9 +80,9 @@ func (g *reconcilerControllerGenerator) GenerateType(c *generator.Context, t *ty
 			Package: "knative.dev/pkg/controller",
 			Name:    "Reconciler",
 		}),
-		"controllerNewImpl": c.Universe.Function(types.Name{
+		"controllerNewContext": c.Universe.Function(types.Name{
 			Package: "knative.dev/pkg/controller",
-			Name:    "NewImpl",
+			Name:    "NewContext",
 		}),
 		"loggingFromContext": c.Universe.Function(types.Name{
 			Package: "knative.dev/pkg/logging",
@@ -134,7 +134,7 @@ func (g *reconcilerControllerGenerator) GenerateType(c *generator.Context, t *ty
 		}),
 		"controllerOptions": c.Universe.Type(types.Name{
 			Package: "knative.dev/pkg/controller",
-			Name:    "Options",
+			Name:    "ControllerOptions",
 		}),
 		"controllerOptionsFn": c.Universe.Type(types.Name{
 			Package: "knative.dev/pkg/controller",
@@ -195,16 +195,28 @@ var reconcilerControllerNewImpl = `
 const (
 	defaultControllerAgentName = "{{.type|lowercaseSingular}}-controller"
 	defaultFinalizerName       = "{{.type|allLowercasePlural}}.{{.group}}"
-	{{if .hasClass}}
+	{{if .hasClass }}
 	// ClassAnnotationKey points to the annotation for the class of this resource.
-	ClassAnnotationKey = "{{ .class }}"
+	{{if gt (.classes | len) 1 }}// Deprecated: Use ClassAnnotationKeys given multiple keys exist
+	{{end -}}
+	ClassAnnotationKey = "{{ index .classes 0 }}"
 	{{end}}
 )
+
+{{if gt (.classes | len) 1 }}
+var (
+	// ClassAnnotationKeys points to the annotation for the class of this resource.
+	ClassAnnotationKeys = []string{
+		{{range $class := .classes}}"{{$class}}",
+		{{end}}
+	}
+)
+{{end}}
 
 // NewImpl returns a {{.controllerImpl|raw}} that handles queuing and feeding work from
 // the queue through an implementation of {{.controllerReconciler|raw}}, delegating to
 // the provided Interface and optional Finalizer methods. OptionsFn is used to return
-// {{.controllerOptions|raw}} to be used but the internal reconciler.
+// {{.controllerOptions|raw}} to be used by the internal reconciler.
 func NewImpl(ctx {{.contextContext|raw}}, r Interface{{if .hasClass}}, classValue string{{end}}, optionsFns ...{{.controllerOptionsFn|raw}}) *{{.controllerImpl|raw}} {
 	logger := {{.loggingFromContext|raw}}(ctx)
 
@@ -217,15 +229,26 @@ func NewImpl(ctx {{.contextContext|raw}}, r Interface{{if .hasClass}}, classValu
 
 	lister := {{.type|lowercaseSingular}}Informer.Lister()
 
+	var promoteFilterFunc func(obj interface{}) bool
+	var promoteFunc = func(bkt {{.reconcilerBucket|raw}}) {}
+
 	rec := &reconcilerImpl{
 		LeaderAwareFuncs: {{.reconcilerLeaderAwareFuncs|raw}}{
 			PromoteFunc: func(bkt {{.reconcilerBucket|raw}}, enq func({{.reconcilerBucket|raw}}, {{.typesNamespacedName|raw}})) error {
+
+				// Signal promotion event
+				promoteFunc(bkt)
+
 				all, err := lister.List({{.labelsEverything|raw}}())
 				if err != nil {
 					return err
 				}
 				for _, elt := range all {
-					// TODO: Consider letting users specify a filter in options.
+					if promoteFilterFunc != nil {
+						if ok := promoteFilterFunc(elt); !ok {
+							continue
+						}
+					}
 					enq(bkt, {{.typesNamespacedName|raw}}{
 						Namespace: elt.GetNamespace(),
 						Name: elt.GetName(),
@@ -251,7 +274,7 @@ func NewImpl(ctx {{.contextContext|raw}}, r Interface{{if .hasClass}}, classValu
 	)
 
 
-	impl := {{.controllerNewImpl|raw}}(rec, logger, ctrTypeName)
+	impl := {{.controllerNewContext|raw}}(ctx, rec, {{ .controllerOptions|raw }}{WorkQueueName: ctrTypeName, Logger: logger})
 	agentName := defaultControllerAgentName
 
 	// Pass impl to the options. Save any optional results.
@@ -271,6 +294,15 @@ func NewImpl(ctx {{.contextContext|raw}}, r Interface{{if .hasClass}}, classValu
 			rec.skipStatusUpdates = true
 		}
 		{{- end}}
+		if opts.DemoteFunc != nil {
+			rec.DemoteFunc = opts.DemoteFunc
+		}
+		if opts.PromoteFilterFunc != nil {
+			promoteFilterFunc = opts.PromoteFilterFunc
+		}
+		if opts.PromoteFunc != nil {
+			promoteFunc = opts.PromoteFunc
+		}
 	}
 
 	rec.Recorder = createRecorder(ctx, agentName)

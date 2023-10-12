@@ -35,32 +35,40 @@ import (
 	"knative.dev/pkg/webhook/resourcesemantics"
 )
 
-// NewAdmissionController constructs a reconciler
-func NewAdmissionController(
+// NewAdmissionControllerWithConfig constructs a reconciler and registers the
+// provided handlers with specified verbs and SubResources
+func NewAdmissionControllerWithConfig(
 	ctx context.Context,
 	name, path string,
 	handlers map[schema.GroupVersionKind]resourcesemantics.GenericCRD,
 	wc func(context.Context) context.Context,
 	disallowUnknownFields bool,
-	callbacks ...map[schema.GroupVersionKind]Callback,
+	callbacks map[schema.GroupVersionKind]Callback,
 ) *controller.Impl {
 
+	opts := []OptionFunc{
+		WithPath(path),
+		WithTypes(handlers),
+		WithWrapContext(wc),
+		WithCallbacks(callbacks),
+	}
+
+	if disallowUnknownFields {
+		opts = append(opts, WithDisallowUnknownFields())
+	}
+	return newController(ctx, name, opts...)
+}
+
+func newController(ctx context.Context, name string, optsFunc ...OptionFunc) *controller.Impl {
 	client := kubeclient.Get(ctx)
 	vwhInformer := vwhinformer.Get(ctx)
 	secretInformer := secretinformer.Get(ctx)
-	options := webhook.GetOptions(ctx)
+	woptions := webhook.GetOptions(ctx)
 
-	// This not ideal, we are using a variadic argument to effectively make callbacks optional
-	// This allows this addition to be non-breaking to consumers of /pkg
-	// TODO: once all sub-repos have adopted this, we might move this back to a traditional param.
-	var unwrappedCallbacks map[schema.GroupVersionKind]Callback
-	switch len(callbacks) {
-	case 0:
-		unwrappedCallbacks = map[schema.GroupVersionKind]Callback{}
-	case 1:
-		unwrappedCallbacks = callbacks[0]
-	default:
-		panic("NewAdmissionController may not be called with multiple callback maps")
+	opts := &options{}
+
+	for _, f := range optsFunc {
+		f(opts)
 	}
 
 	wh := &reconciler{
@@ -75,13 +83,13 @@ func NewAdmissionController(
 		key: types.NamespacedName{
 			Name: name,
 		},
-		path:      path,
-		handlers:  handlers,
-		callbacks: unwrappedCallbacks,
+		path:      opts.path,
+		handlers:  opts.types,
+		callbacks: opts.callbacks,
 
-		withContext:           wc,
-		disallowUnknownFields: disallowUnknownFields,
-		secretName:            options.SecretName,
+		withContext:           opts.wc,
+		disallowUnknownFields: opts.DisallowUnknownFields(),
+		secretName:            woptions.SecretName,
 
 		client:       client,
 		vwhlister:    vwhInformer.Lister(),
@@ -89,8 +97,13 @@ func NewAdmissionController(
 	}
 
 	logger := logging.FromContext(ctx)
-	const queueName = "ValidationWebhook"
-	c := controller.NewImpl(wh, logger.Named(queueName), queueName)
+
+	controllerOptions := woptions.ControllerOptions
+	if woptions.ControllerOptions == nil {
+		const queueName = "ValidationWebhook"
+		controllerOptions = &controller.ControllerOptions{WorkQueueName: queueName, Logger: logger.Named(queueName)}
+	}
+	c := controller.NewContext(ctx, wh, *controllerOptions)
 
 	// Reconcile when the named ValidatingWebhookConfiguration changes.
 	vwhInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
@@ -109,4 +122,29 @@ func NewAdmissionController(
 	})
 
 	return c
+
+}
+
+// NewAdmissionController constructs a reconciler
+func NewAdmissionController(
+	ctx context.Context,
+	name, path string,
+	handlers map[schema.GroupVersionKind]resourcesemantics.GenericCRD,
+	wc func(context.Context) context.Context,
+	disallowUnknownFields bool,
+	callbacks ...map[schema.GroupVersionKind]Callback,
+) *controller.Impl {
+	// This not ideal, we are using a variadic argument to effectively make callbacks optional
+	// This allows this addition to be non-breaking to consumers of /pkg
+	// TODO: once all sub-repos have adopted this, we might move this back to a traditional param.
+	var unwrappedCallbacks map[schema.GroupVersionKind]Callback
+	switch len(callbacks) {
+	case 0:
+		unwrappedCallbacks = map[schema.GroupVersionKind]Callback{}
+	case 1:
+		unwrappedCallbacks = callbacks[0]
+	default:
+		panic("NewAdmissionController may not be called with multiple callback maps")
+	}
+	return NewAdmissionControllerWithConfig(ctx, name, path, handlers, wc, disallowUnknownFields, unwrappedCallbacks)
 }

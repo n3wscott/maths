@@ -17,7 +17,6 @@ limitations under the License.
 package generators
 
 import (
-	"path"
 	"path/filepath"
 	"strings"
 
@@ -27,7 +26,7 @@ import (
 	"k8s.io/gengo/generator"
 	"k8s.io/gengo/namer"
 	"k8s.io/gengo/types"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	informergenargs "knative.dev/pkg/codegen/cmd/injection-gen/args"
 )
@@ -48,21 +47,17 @@ func Packages(context *generator.Context, arguments *args.GeneratorArgs) generat
 
 	var packageList generator.Packages
 
-	groupVersions := make(map[string]clientgentypes.GroupVersions)
 	groupGoNames := make(map[string]string)
 	for _, inputDir := range arguments.InputDirs {
 		p := context.Universe.Package(vendorless(inputDir))
 
 		var gv clientgentypes.GroupVersion
-		var targetGroupVersions map[string]clientgentypes.GroupVersions
 
 		parts := strings.Split(p.Path, "/")
 		gv.Group = clientgentypes.Group(parts[len(parts)-2])
 		gv.Version = clientgentypes.Version(parts[len(parts)-1])
-		targetGroupVersions = groupVersions
 
 		groupPackageName := gv.Group.NonEmpty()
-		gvPackage := path.Clean(p.Path)
 
 		// If there's a comment of the form "// +groupName=somegroup" or
 		// "// +groupName=somegroup.foo.bar.io", use the first field (somegroup) as the name of the
@@ -77,12 +72,6 @@ func Packages(context *generator.Context, arguments *args.GeneratorArgs) generat
 		if override := types.ExtractCommentTags("+", p.Comments)["groupGoName"]; override != nil {
 			groupGoNames[groupPackageName] = namer.IC(override[0])
 		}
-
-		// Generate the client and fake.
-		packageList = append(packageList, versionClientsPackages(versionPackagePath, boilerplate, customArgs)...)
-
-		// Generate the informer factory and fake.
-		packageList = append(packageList, versionFactoryPackages(versionPackagePath, boilerplate, customArgs)...)
 
 		var typesWithInformers []*types.Type
 		var duckTypes []*types.Type
@@ -99,16 +88,6 @@ func Packages(context *generator.Context, arguments *args.GeneratorArgs) generat
 				reconcilerTypes = append(reconcilerTypes, t)
 			}
 		}
-
-		groupVersionsEntry, ok := targetGroupVersions[groupPackageName]
-		if !ok {
-			groupVersionsEntry = clientgentypes.GroupVersions{
-				PackageName: groupPackageName,
-				Group:       gv.Group,
-			}
-		}
-		groupVersionsEntry.Versions = append(groupVersionsEntry.Versions, clientgentypes.PackageVersion{Version: gv.Version, Package: gvPackage})
-		targetGroupVersions[groupPackageName] = groupVersionsEntry
 
 		if len(typesWithInformers) != 0 {
 			orderer := namer.Orderer{Namer: namer.NewPrivateNamer(0)}
@@ -134,6 +113,12 @@ func Packages(context *generator.Context, arguments *args.GeneratorArgs) generat
 			packageList = append(packageList, reconcilerPackages(versionPackagePath, groupPackageName, gv, groupGoNames[groupPackageName], boilerplate, reconcilerTypes, customArgs)...)
 		}
 	}
+
+	// Generate the client and fake.
+	packageList = append(packageList, versionClientsPackages(versionPackagePath, boilerplate, customArgs)...)
+
+	// Generate the informer factory and fake.
+	packageList = append(packageList, versionFactoryPackages(versionPackagePath, boilerplate, customArgs)...)
 
 	return packageList
 }
@@ -182,29 +167,36 @@ func MustParseClientGenTags(lines []string) Tags {
 	return ret
 }
 
-func extractCommentTags(t *types.Type) map[string]map[string]string {
+func extractCommentTags(t *types.Type) CommentTags {
 	comments := append(append([]string{}, t.SecondClosestCommentLines...), t.CommentLines...)
 	return ExtractCommentTags("+", comments)
 }
 
-func extractReconcilerClassTag(tags map[string]map[string]string) (string, bool) {
+func extractReconcilerClassesTag(tags CommentTags) ([]string, bool) {
 	vals, ok := tags["genreconciler"]
 	if !ok {
-		return "", false
+		return nil, false
 	}
-	classname, has := vals["class"]
-	return classname, has
+	classnames, has := vals["class"]
+	if has && len(classnames) == 0 {
+		return nil, false
+	}
+	return classnames, has
 }
 
-func isKRShaped(tags map[string]map[string]string) bool {
+func isKRShaped(tags CommentTags) bool {
 	vals, has := tags["genreconciler"]
 	if !has {
 		return false
 	}
-	return vals["krshapedlogic"] != "false"
+	stringVals, has := vals["krshapedlogic"]
+	if !has || len(vals) == 0 {
+		return true // Default is true
+	}
+	return stringVals[0] != "false"
 }
 
-func isNonNamespaced(tags map[string]map[string]string) bool {
+func isNonNamespaced(tags CommentTags) bool {
 	vals, has := tags["genclient"]
 	if !has {
 		return false
@@ -213,7 +205,7 @@ func isNonNamespaced(tags map[string]map[string]string) bool {
 	return has
 }
 
-func stubs(tags map[string]map[string]string) bool {
+func stubs(tags CommentTags) bool {
 	vals, has := tags["genreconciler"]
 	if !has {
 		return false
@@ -248,6 +240,7 @@ func versionClientsPackages(basePackage string, boilerplate []byte, customArgs *
 					DefaultGen: generator.DefaultGen{
 						OptionalName: "client",
 					},
+
 					outputPackage:    packagePath,
 					imports:          generator.NewImportTracker(),
 					clientSetPackage: customArgs.VersionedClientSetPackage,
@@ -522,7 +515,7 @@ func reconcilerPackages(basePackage string, groupPkgName string, gv clientgentyp
 		// Fix for golang iterator bug.
 		t := t
 		extracted := extractCommentTags(t)
-		reconcilerClass, hasReconcilerClass := extractReconcilerClassTag(extracted)
+		reconcilerClasses, hasReconcilerClass := extractReconcilerClassesTag(extracted)
 		nonNamespaced := isNonNamespaced(extracted)
 		isKRShaped := isKRShaped(extracted)
 		stubs := stubs(extracted)
@@ -550,7 +543,7 @@ func reconcilerPackages(basePackage string, groupPkgName string, gv clientgentyp
 					clientPkg:           clientPackagePath,
 					informerPackagePath: informerPackagePath,
 					schemePkg:           filepath.Join(customArgs.VersionedClientSetPackage, "scheme"),
-					reconcilerClass:     reconcilerClass,
+					reconcilerClasses:   reconcilerClasses,
 					hasReconcilerClass:  hasReconcilerClass,
 					hasStatus:           hasStatus(t),
 				})
@@ -579,7 +572,7 @@ func reconcilerPackages(basePackage string, groupPkgName string, gv clientgentyp
 						outputPackage:       filepath.Join(packagePath, "stub"),
 						imports:             generator.NewImportTracker(),
 						informerPackagePath: informerPackagePath,
-						reconcilerClass:     reconcilerClass,
+						reconcilerClasses:   reconcilerClasses,
 						hasReconcilerClass:  hasReconcilerClass,
 					})
 					return generators
@@ -610,7 +603,7 @@ func reconcilerPackages(basePackage string, groupPkgName string, gv clientgentyp
 					listerPkg:          listerPackagePath,
 					groupGoName:        groupGoName,
 					groupVersion:       gv,
-					reconcilerClass:    reconcilerClass,
+					reconcilerClasses:  reconcilerClasses,
 					hasReconcilerClass: hasReconcilerClass,
 					nonNamespaced:      nonNamespaced,
 					isKRShaped:         isKRShaped,

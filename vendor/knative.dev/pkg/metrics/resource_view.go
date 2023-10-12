@@ -29,7 +29,7 @@ import (
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
-	"k8s.io/apimachinery/pkg/util/clock"
+	"k8s.io/utils/clock"
 )
 
 type storedViews struct {
@@ -53,7 +53,7 @@ type meters struct {
 	meters         map[string]*meterExporter
 	factory        ResourceExporterFactory
 	lock           sync.Mutex
-	clock          clock.Clock
+	clock          clock.WithTicker
 	ticker         clock.Ticker
 	tickerStopChan chan struct{}
 }
@@ -65,7 +65,7 @@ var (
 	resourceViews = storedViews{}
 	allMeters     = meters{
 		meters: map[string]*meterExporter{"": &defaultMeter},
-		clock:  clock.Clock(clock.RealClock{}),
+		clock:  clock.RealClock{},
 	}
 
 	cleanupOnce                = new(sync.Once)
@@ -82,10 +82,16 @@ func cleanup() {
 	expiryCutoff := allMeters.clock.Now().Add(-1 * maxMeterExporterAge)
 	allMeters.lock.Lock()
 	defer allMeters.lock.Unlock()
+	resourceViews.lock.Lock()
+	defer resourceViews.lock.Unlock()
 	for key, meter := range allMeters.meters {
 		if key != "" && meter.t.Before(expiryCutoff) {
 			flushGivenExporter(meter.e)
+			// Make a copy of views to avoid data races
+			viewsCopy := copyViews(resourceViews.views)
+			meter.m.Unregister(viewsCopy...)
 			delete(allMeters.meters, key)
+			meter.m.Stop()
 		}
 	}
 }
@@ -139,7 +145,7 @@ func RegisterResourceView(views ...*view.View) error {
 	return nil
 }
 
-// UnregisterResourceView is similar to view.Unregiste(), except that it will
+// UnregisterResourceView is similar to view.Unregister(), except that it will
 // unregister the view across all Resources tracked byt he system, rather than
 // simply the default view.
 func UnregisterResourceView(views ...*view.View) {

@@ -23,7 +23,7 @@ import (
 	"k8s.io/gengo/generator"
 	"k8s.io/gengo/namer"
 	"k8s.io/gengo/types"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 // injectionTestGenerator produces a file of listers for a given GroupVersion and
@@ -95,6 +95,10 @@ func (g *filteredInjectionGenerator) GenerateType(c *generator.Context, t *types
 			Package: "context",
 			Name:    "Context",
 		}),
+		"contextWithValue": c.Universe.Function(types.Name{
+			Package: "context",
+			Name:    "WithValue",
+		}),
 	}
 
 	sw.Do(filteredInjectionInformer, m)
@@ -123,7 +127,7 @@ func withInformer(ctx {{.contextContext|raw}}) ({{.contextContext|raw}}, []{{.co
 	for _, selector := range labelSelectors {
 		f := {{.factoryGet|raw}}(ctx, selector)
 		inf := f.{{.group}}().{{.version}}().{{.type|publicPlural}}()
-		ctx = context.WithValue(ctx, Key{Selector: selector}, inf)
+		ctx = {{ .contextWithValue|raw }}(ctx, Key{Selector: selector}, inf)
 		infs = append(infs, inf.Informer())
 	}
 	return ctx, infs

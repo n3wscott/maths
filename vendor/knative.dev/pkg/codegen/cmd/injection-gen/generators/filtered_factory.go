@@ -22,8 +22,7 @@ import (
 	"k8s.io/gengo/generator"
 	"k8s.io/gengo/namer"
 	"k8s.io/gengo/types"
-
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 // factoryTestGenerator produces a file of factory injection of a given type.
@@ -111,10 +110,6 @@ func WithSelectors(ctx {{.contextContext|raw}}, selector ...string) context.Cont
 
 func withInformerFactory(ctx {{.contextContext|raw}}) {{.contextContext|raw}} {
 	c := {{.cachingClientGet|raw}}(ctx)
-	opts := []{{.informersSharedInformerOption|raw}}{}
-	if {{.injectionHasNamespace|raw}}(ctx) {
-		opts = append(opts, {{.informersWithNamespace|raw}}({{.injectionGetNamespace|raw}}(ctx)))
-	}
 	untyped := ctx.Value(LabelKey{})
 	if untyped == nil {
 		{{.loggingFromContext|raw}}(ctx).Panic(
@@ -122,11 +117,15 @@ func withInformerFactory(ctx {{.contextContext|raw}}) {{.contextContext|raw}} {
 	}
 	labelSelectors := untyped.([]string)
 	for _, selector := range labelSelectors {
-		thisOpts := append(opts, {{.informersWithTweakListOptions|raw}}(func(l *{{.metav1ListOptions|raw}}) {
+		opts := []{{.informersSharedInformerOption|raw}}{}
+		if {{.injectionHasNamespace|raw}}(ctx) {
+			opts = append(opts, {{.informersWithNamespace|raw}}({{.injectionGetNamespace|raw}}(ctx)))
+		}	
+		opts = append(opts, {{.informersWithTweakListOptions|raw}}(func(l *{{.metav1ListOptions|raw}}) {
 			l.LabelSelector = selector
 		}))
 		ctx = context.WithValue(ctx, Key{Selector: selector},
-			{{.informersNewSharedInformerFactoryWithOptions|raw}}(c, {{.controllerGetResyncPeriod|raw}}(ctx), thisOpts...))
+			{{.informersNewSharedInformerFactoryWithOptions|raw}}(c, {{.controllerGetResyncPeriod|raw}}(ctx), opts...))
 	}
 	return ctx
 }

@@ -23,7 +23,6 @@ import (
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
-	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	types "k8s.io/apimachinery/pkg/types"
 	watch "k8s.io/apimachinery/pkg/watch"
 	testing "k8s.io/client-go/testing"
@@ -36,9 +35,9 @@ type FakeSubtracts struct {
 	ns   string
 }
 
-var subtractsResource = schema.GroupVersionResource{Group: "maths.tableflip.dev", Version: "v1alpha1", Resource: "subtracts"}
+var subtractsResource = v1alpha1.SchemeGroupVersion.WithResource("subtracts")
 
-var subtractsKind = schema.GroupVersionKind{Group: "maths.tableflip.dev", Version: "v1alpha1", Kind: "Subtract"}
+var subtractsKind = v1alpha1.SchemeGroupVersion.WithKind("Subtract")
 
 // Get takes name of the subtract, and returns the corresponding subtract object, and an error if there is any.
 func (c *FakeSubtracts) Get(ctx context.Context, name string, options v1.GetOptions) (result *v1alpha1.Subtract, err error) {
@@ -117,7 +116,7 @@ func (c *FakeSubtracts) UpdateStatus(ctx context.Context, subtract *v1alpha1.Sub
 // Delete takes name of the subtract and deletes it. Returns an error if one occurs.
 func (c *FakeSubtracts) Delete(ctx context.Context, name string, opts v1.DeleteOptions) error {
 	_, err := c.Fake.
-		Invokes(testing.NewDeleteAction(subtractsResource, c.ns, name), &v1alpha1.Subtract{})
+		Invokes(testing.NewDeleteActionWithOptions(subtractsResource, c.ns, name, opts), &v1alpha1.Subtract{})
 
 	return err
 }

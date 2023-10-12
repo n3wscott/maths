@@ -23,7 +23,6 @@ import (
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
-	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	types "k8s.io/apimachinery/pkg/types"
 	watch "k8s.io/apimachinery/pkg/watch"
 	testing "k8s.io/client-go/testing"
@@ -36,9 +35,9 @@ type FakeAdds struct {
 	ns   string
 }
 
-var addsResource = schema.GroupVersionResource{Group: "maths.tableflip.dev", Version: "v1alpha1", Resource: "adds"}
+var addsResource = v1alpha1.SchemeGroupVersion.WithResource("adds")
 
-var addsKind = schema.GroupVersionKind{Group: "maths.tableflip.dev", Version: "v1alpha1", Kind: "Add"}
+var addsKind = v1alpha1.SchemeGroupVersion.WithKind("Add")
 
 // Get takes name of the add, and returns the corresponding add object, and an error if there is any.
 func (c *FakeAdds) Get(ctx context.Context, name string, options v1.GetOptions) (result *v1alpha1.Add, err error) {
@@ -117,7 +116,7 @@ func (c *FakeAdds) UpdateStatus(ctx context.Context, add *v1alpha1.Add, opts v1.
 // Delete takes name of the add and deletes it. Returns an error if one occurs.
 func (c *FakeAdds) Delete(ctx context.Context, name string, opts v1.DeleteOptions) error {
 	_, err := c.Fake.
-		Invokes(testing.NewDeleteAction(addsResource, c.ns, name), &v1alpha1.Add{})
+		Invokes(testing.NewDeleteActionWithOptions(addsResource, c.ns, name, opts), &v1alpha1.Add{})
 
 	return err
 }

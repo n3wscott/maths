@@ -23,7 +23,7 @@ import (
 	"k8s.io/gengo/generator"
 	"k8s.io/gengo/namer"
 	"k8s.io/gengo/types"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 // injectionTestGenerator produces a file of listers for a given GroupVersion and
@@ -79,9 +79,9 @@ func (g *injectionGenerator) GenerateType(c *generator.Context, t *types.Type, w
 	klog.V(5).Info("processing type ", t)
 
 	m := map[string]interface{}{
-		"group":                     namer.IC(g.groupGoName),
+		"groupGoName":               namer.IC(g.groupGoName),
+		"versionGoName":             namer.IC(g.groupVersion.Version.String()),
 		"type":                      t,
-		"version":                   namer.IC(g.groupVersion.Version.String()),
 		"injectionRegisterInformer": c.Universe.Type(types.Name{Package: "knative.dev/pkg/injection", Name: "Default.RegisterInformer"}),
 		"controllerInformer":        c.Universe.Type(types.Name{Package: "knative.dev/pkg/controller", Name: "Informer"}),
 		"informersTypedInformer":    c.Universe.Type(types.Name{Package: g.typedInformerPackage, Name: t.Name.Name + "Informer"}),
@@ -93,6 +93,10 @@ func (g *injectionGenerator) GenerateType(c *generator.Context, t *types.Type, w
 		"contextContext": c.Universe.Type(types.Name{
 			Package: "context",
 			Name:    "Context",
+		}),
+		"contextWithValue": c.Universe.Function(types.Name{
+			Package: "context",
+			Name:    "WithValue",
 		}),
 	}
 
@@ -111,8 +115,8 @@ type Key struct{}
 
 func withInformer(ctx {{.contextContext|raw}}) ({{.contextContext|raw}}, {{.controllerInformer|raw}}) {
 	f := {{.factoryGet|raw}}(ctx)
-	inf := f.{{.group}}().{{.version}}().{{.type|publicPlural}}()
-	return context.WithValue(ctx, Key{}, inf), inf.Informer()
+	inf := f.{{.groupGoName}}().{{.versionGoName}}().{{.type|publicPlural}}()
+	return {{ .contextWithValue|raw }}(ctx, Key{}, inf), inf.Informer()
 }
 
 // Get extracts the typed informer from the context.

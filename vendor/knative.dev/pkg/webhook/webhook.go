@@ -21,27 +21,31 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"html"
+	"log"
+	"net"
 	"net/http"
 	"time"
 
 	// Injection stuff
-	kubeclient "knative.dev/pkg/client/injection/kube/client"
+
+	"knative.dev/pkg/controller"
 	kubeinformerfactory "knative.dev/pkg/injection/clients/namespacedkube/informers/factory"
 	"knative.dev/pkg/network/handlers"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	admissionv1 "k8s.io/api/admission/v1"
-	"k8s.io/client-go/kubernetes"
-	corelisters "k8s.io/client-go/listers/core/v1"
 	"knative.dev/pkg/logging"
-	"knative.dev/pkg/network"
 	"knative.dev/pkg/system"
-	certresources "knative.dev/pkg/webhook/certificates/resources"
 )
 
 // Options contains the configuration for the webhook
 type Options struct {
+	// TLSMinVersion contains the minimum TLS version that is acceptable to communicate with the API server.
+	// TLS 1.3 is the minimum version if not specified otherwise.
+	TLSMinVersion uint16
+
 	// ServiceName is the service name of the webhook.
 	ServiceName string
 
@@ -50,7 +54,16 @@ type Options struct {
 	// server key/cert are used to serve the webhook and the CA cert
 	// is provided to k8s apiserver during admission controller
 	// registration.
+	// If no SecretName is provided, then the webhook serves without TLS.
 	SecretName string
+
+	// ServerPrivateKeyName is the name for the webhook secret's data key e.g. `tls.key`.
+	// Default value is `server-key.pem` if no value is passed.
+	ServerPrivateKeyName string
+
+	// ServerCertificateName is the name for the webhook secret's ca data key e.g. `tls.crt`.
+	// Default value is `server-cert.pem` if no value is passed.
+	ServerCertificateName string
 
 	// Port where the webhook is served. Per k8s admission
 	// registration requirements this should be 443 unless there is
@@ -60,6 +73,14 @@ type Options struct {
 	// StatsReporter reports metrics about the webhook.
 	// This will be automatically initialized by the constructor if left uninitialized.
 	StatsReporter StatsReporter
+
+	// GracePeriod is how long to wait after failing readiness probes
+	// before shutting down.
+	GracePeriod time.Duration
+
+	// ControllerOptions encapsulates options for creating a new controller,
+	// including throttling and stats behavior.
+	ControllerOptions *controller.ControllerOptions
 }
 
 // Operation is the verb being operated on
@@ -77,19 +98,19 @@ const (
 // Webhook implements the external webhook for validation of
 // resources and configuration.
 type Webhook struct {
-	Client  kubernetes.Interface
 	Options Options
 	Logger  *zap.SugaredLogger
 
 	// synced is function that is called when the informers have been synced.
 	synced context.CancelFunc
 
-	// grace period is how long to wait after failing readiness probes
-	// before shutting down.
-	gracePeriod time.Duration
+	mux http.ServeMux
 
-	mux          http.ServeMux
-	secretlister corelisters.SecretLister
+	// The TLS configuration to use for serving (or nil for non-TLS)
+	tlsConfig *tls.Config
+
+	// testListener is only used in testing so we don't get port conflicts
+	testListener net.Listener
 }
 
 // New constructs a Webhook
@@ -105,15 +126,6 @@ func New(
 		}
 	}()
 
-	client := kubeclient.Get(ctx)
-
-	// Injection is too aggressive for this case because by simply linking this
-	// library we force consumers to have secret access.  If we require that one
-	// of the admission controllers' informers *also* require the secret
-	// informer, then we can fetch the shared informer factory here and produce
-	// a new secret informer from it.
-	secretInformer := kubeinformerfactory.Get(ctx).Core().V1().Secrets()
-
 	opts := GetOptions(ctx)
 	if opts == nil {
 		return nil, errors.New("context must have Options specified")
@@ -128,19 +140,65 @@ func New(
 		opts.StatsReporter = reporter
 	}
 
+	defaultTLSMinVersion := uint16(tls.VersionTLS13)
+	if opts.TLSMinVersion == 0 {
+		opts.TLSMinVersion = TLSMinVersionFromEnv(defaultTLSMinVersion)
+	} else if opts.TLSMinVersion != tls.VersionTLS12 && opts.TLSMinVersion != tls.VersionTLS13 {
+		return nil, fmt.Errorf("unsupported TLS version: %d", opts.TLSMinVersion)
+	}
+
 	syncCtx, cancel := context.WithCancel(context.Background())
 
 	webhook = &Webhook{
-		Client:       client,
-		Options:      *opts,
-		secretlister: secretInformer.Lister(),
-		Logger:       logger,
-		synced:       cancel,
-		gracePeriod:  network.DefaultDrainTimeout,
+		Options: *opts,
+		Logger:  logger,
+		synced:  cancel,
+	}
+
+	if opts.SecretName != "" {
+		// Injection is too aggressive for this case because by simply linking this
+		// library we force consumers to have secret access.  If we require that one
+		// of the admission controllers' informers *also* require the secret
+		// informer, then we can fetch the shared informer factory here and produce
+		// a new secret informer from it.
+		secretInformer := kubeinformerfactory.Get(ctx).Core().V1().Secrets()
+
+		webhook.tlsConfig = &tls.Config{
+			MinVersion: opts.TLSMinVersion,
+
+			// If we return (nil, error) the client sees - 'tls: internal error"
+			// If we return (nil, nil) the client sees - 'tls: no certificates configured'
+			//
+			// We'll return (nil, nil) when we don't find a certificate
+			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+				secret, err := secretInformer.Lister().Secrets(system.Namespace()).Get(opts.SecretName)
+				if err != nil {
+					logger.Errorw("failed to fetch secret", zap.Error(err))
+					return nil, nil
+				}
+				webOpts := GetOptions(ctx)
+				sKey, sCert := getSecretDataKeyNamesOrDefault(webOpts.ServerPrivateKeyName, webOpts.ServerCertificateName)
+				serverKey, ok := secret.Data[sKey]
+				if !ok {
+					logger.Warn("server key missing")
+					return nil, nil
+				}
+				serverCert, ok := secret.Data[sCert]
+				if !ok {
+					logger.Warn("server cert missing")
+					return nil, nil
+				}
+				cert, err := tls.X509KeyPair(serverCert, serverKey)
+				if err != nil {
+					return nil, err
+				}
+				return &cert, nil
+			},
+		}
 	}
 
 	webhook.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, fmt.Sprint("no controller registered for: ", r.URL.Path), http.StatusBadRequest)
+		http.Error(w, fmt.Sprint("no controller registered for: ", html.EscapeString(r.URL.Path)), http.StatusBadRequest)
 	})
 
 	for _, controller := range controllers {
@@ -156,7 +214,6 @@ func New(
 		default:
 			return nil, fmt.Errorf("unknown webhook controller type:  %T", controller)
 		}
-
 	}
 
 	return
@@ -169,6 +226,15 @@ func (wh *Webhook) InformersHaveSynced() {
 	wh.Logger.Info("Informers have been synced, unblocking admission webhooks.")
 }
 
+type zapWrapper struct {
+	logger *zap.SugaredLogger
+}
+
+func (z *zapWrapper) Write(p []byte) (n int, err error) {
+	z.logger.Errorw(string(p))
+	return len(p), nil
+}
+
 // Run implements the admission controller run loop.
 func (wh *Webhook) Run(stop <-chan struct{}) error {
 	logger := wh.Logger
@@ -176,49 +242,37 @@ func (wh *Webhook) Run(stop <-chan struct{}) error {
 
 	drainer := &handlers.Drainer{
 		Inner:       wh,
-		QuietPeriod: wh.gracePeriod,
+		QuietPeriod: wh.Options.GracePeriod,
 	}
 
 	server := &http.Server{
-		Handler: drainer,
-		Addr:    fmt.Sprint(":", wh.Options.Port),
-		TLSConfig: &tls.Config{
-			MinVersion: tls.VersionTLS12,
+		ErrorLog:          log.New(&zapWrapper{logger}, "", 0),
+		Handler:           drainer,
+		Addr:              fmt.Sprint(":", wh.Options.Port),
+		TLSConfig:         wh.tlsConfig,
+		ReadHeaderTimeout: time.Minute, //https://medium.com/a-journey-with-go/go-understand-and-mitigate-slowloris-attack-711c1b1403f6
+	}
 
-			// If we return (nil, error) the client sees - 'tls: internal error"
-			// If we return (nil, nil) the client sees - 'tls: no certificates configured'
-			//
-			// We'll return (nil, nil) when we don't find a certificate
-			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-				secret, err := wh.secretlister.Secrets(system.Namespace()).Get(wh.Options.SecretName)
-				if err != nil {
-					logger.Errorw("failed to fetch secret", zap.Error(err))
-					return nil, nil
-				}
+	var serve = server.ListenAndServe
 
-				serverKey, ok := secret.Data[certresources.ServerKey]
-				if !ok {
-					logger.Warn("server key missing")
-					return nil, nil
-				}
-				serverCert, ok := secret.Data[certresources.ServerCert]
-				if !ok {
-					logger.Warn("server cert missing")
-					return nil, nil
-				}
-				cert, err := tls.X509KeyPair(serverCert, serverKey)
-				if err != nil {
-					return nil, err
-				}
-				return &cert, nil
-			},
-		},
+	if server.TLSConfig != nil && wh.testListener != nil {
+		serve = func() error {
+			return server.ServeTLS(wh.testListener, "", "")
+		}
+	} else if server.TLSConfig != nil {
+		serve = func() error {
+			return server.ListenAndServeTLS("", "")
+		}
+	} else if wh.testListener != nil {
+		serve = func() error {
+			return server.Serve(wh.testListener)
+		}
 	}
 
 	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
-		if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Errorw("ListenAndServeTLS for admission webhook returned error", zap.Error(err))
+		if err := serve(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Errorw("ListenAndServe for admission webhook returned error", zap.Error(err))
 			return err
 		}
 		return nil

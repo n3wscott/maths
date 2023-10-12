@@ -24,7 +24,7 @@ import (
 	"k8s.io/gengo/generator"
 	"k8s.io/gengo/namer"
 	"k8s.io/gengo/types"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 // reconcilerReconcilerGenerator produces a reconciler struct for the given type.
@@ -37,7 +37,7 @@ type reconcilerReconcilerGenerator struct {
 	listerName     string
 	listerPkg      string
 
-	reconcilerClass    string
+	reconcilerClasses  []string
 	hasReconcilerClass bool
 	nonNamespaced      bool
 	isKRShaped         bool
@@ -74,7 +74,7 @@ func (g *reconcilerReconcilerGenerator) GenerateType(c *generator.Context, t *ty
 		"type":          t,
 		"group":         namer.IC(g.groupGoName),
 		"version":       namer.IC(g.groupVersion.Version.String()),
-		"class":         g.reconcilerClass,
+		"classes":       g.reconcilerClasses,
 		"hasClass":      g.hasReconcilerClass,
 		"isKRShaped":    g.isKRShaped,
 		"hasStatus":     g.hasStatus,
@@ -111,6 +111,7 @@ func (g *reconcilerReconcilerGenerator) GenerateType(c *generator.Context, t *ty
 		"reconcilerReconcilerEvent":      c.Universe.Type(types.Name{Package: "knative.dev/pkg/reconciler", Name: "ReconcilerEvent"}),
 		"reconcilerRetryUpdateConflicts": c.Universe.Function(types.Name{Package: "knative.dev/pkg/reconciler", Name: "RetryUpdateConflicts"}),
 		"reconcilerConfigStore":          c.Universe.Type(types.Name{Name: "ConfigStore", Package: "knative.dev/pkg/reconciler"}),
+		"reconcilerOnDeletionInterface":  c.Universe.Type(types.Name{Package: "knative.dev/pkg/reconciler", Name: "OnDeletionInterface"}),
 		// Deps
 		"clientsetInterface": c.Universe.Type(types.Name{Name: "Interface", Package: g.clientsetPkg}),
 		"resourceLister":     c.Universe.Type(types.Name{Name: g.listerName, Package: g.listerPkg}),
@@ -149,9 +150,17 @@ func (g *reconcilerReconcilerGenerator) GenerateType(c *generator.Context, t *ty
 			Package: "go.uber.org/zap",
 			Name:    "SugaredLogger",
 		}),
+		"zapDebugLevel": c.Universe.Type(types.Name{
+			Package: "go.uber.org/zapcore",
+			Name:    "DebugLevel",
+		}),
 		"setsNewString": c.Universe.Function(types.Name{
 			Package: "k8s.io/apimachinery/pkg/util/sets",
 			Name:    "NewString",
+		}),
+		"setsString": c.Universe.Type(types.Name{
+			Package: "k8s.io/apimachinery/pkg/util/sets",
+			Name:    "String",
 		}),
 		"controllerOptions": c.Universe.Type(types.Name{
 			Package: "knative.dev/pkg/controller",
@@ -166,7 +175,6 @@ func (g *reconcilerReconcilerGenerator) GenerateType(c *generator.Context, t *ty
 			Name:    "SafeDiff",
 		}),
 		"fmtErrorf":           c.Universe.Package("fmt").Function("Errorf"),
-		"reflectDeepEqual":    c.Universe.Package("reflect").Function("DeepEqual"),
 		"equalitySemantic":    c.Universe.Package("k8s.io/apimachinery/pkg/api/equality").Variable("Semantic"),
 		"jsonMarshal":         c.Universe.Package("encoding/json").Function("Marshal"),
 		"typesMergePatchType": c.Universe.Package("k8s.io/apimachinery/pkg/types").Constant("MergePatchType"),
@@ -206,15 +214,22 @@ func (g *reconcilerReconcilerGenerator) GenerateType(c *generator.Context, t *ty
 			Package: "knative.dev/pkg/reconciler",
 			Name:    "DoFinalizeKind",
 		}),
-		"doObserveFinalizeKind": c.Universe.Type(types.Name{
-			Package: "knative.dev/pkg/reconciler",
-			Name:    "DoObserveFinalizeKind",
+		"controllerIsSkipKey": c.Universe.Function(types.Name{
+			Package: "knative.dev/pkg/controller",
+			Name:    "IsSkipKey",
+		}),
+		"controllerIsRequeueKey": c.Universe.Function(types.Name{
+			Package: "knative.dev/pkg/controller",
+			Name:    "IsRequeueKey",
 		}),
 	}
 
 	sw.Do(reconcilerInterfaceFactory, m)
 	sw.Do(reconcilerNewReconciler, m)
 	sw.Do(reconcilerImplFactory, m)
+	if len(g.reconcilerClasses) > 1 {
+		sw.Do(reconcilerLookupClass, m)
+	}
 	if g.hasStatus {
 		sw.Do(reconcilerStatusFactory, m)
 	}
@@ -222,6 +237,17 @@ func (g *reconcilerReconcilerGenerator) GenerateType(c *generator.Context, t *ty
 
 	return sw.Error()
 }
+
+var reconcilerLookupClass = `
+func lookupClass(annotations map[string]string) (string, bool) {
+	for _, key := range ClassAnnotationKeys {
+		 if val, ok := annotations[key]; ok {
+		   return val, true
+		 }
+	}
+	return "", false
+}
+`
 
 var reconcilerInterfaceFactory = `
 // Interface defines the strongly typed interfaces to be implemented by a
@@ -256,27 +282,17 @@ type ReadOnlyInterface interface {
 	ObserveKind(ctx {{.contextContext|raw}}, o *{{.type|raw}}) {{.reconcilerEvent|raw}}
 }
 
-// ReadOnlyFinalizer defines the strongly typed interfaces to be implemented by a
-// controller finalizing {{.type|raw}} if they want to process tombstoned resources
-// even when they are not the leader.  Due to the nature of how finalizers are handled
-// there are no guarantees that this will be called.
-type ReadOnlyFinalizer interface {
-	// ObserveFinalizeKind implements custom logic to observe the final state of {{.type|raw}}.
-	// This method should not write to the API.
-	ObserveFinalizeKind(ctx {{.contextContext|raw}}, o *{{.type|raw}}) {{.reconcilerEvent|raw}}
-}
-
 type doReconcile func(ctx {{.contextContext|raw}}, o *{{.type|raw}}) {{.reconcilerEvent|raw}}
 
 // reconcilerImpl implements controller.Reconciler for {{.type|raw}} resources.
 type reconcilerImpl struct {
-	// LeaderAwareFuncs is inlined to help us implement {{.reconcilerLeaderAware|raw}}
+	// LeaderAwareFuncs is inlined to help us implement {{.reconcilerLeaderAware|raw}}.
 	{{.reconcilerLeaderAwareFuncs|raw}}
 
 	// Client is used to write back status updates.
 	Client {{.clientsetInterface|raw}}
 
-	// Listers index properties about resources
+	// Listers index properties about resources.
 	Lister {{.resourceLister|raw}}
 
 	// Recorder is an event recorder for recording Event resources to the
@@ -299,13 +315,20 @@ type reconcilerImpl struct {
 	skipStatusUpdates bool
 	{{end}}
 
-	{{if .hasClass}}
-	// classValue is the resource annotation[{{ .class }}] instance value this reconciler instance filters on.
+	{{if len .classes | eq 1 }}
+	// classValue is the resource annotation[{{ index .classes 0 }}] instance value this reconciler instance filters on.
+	classValue string
+	{{else if gt (len .classes) 1 }}
+	// classValue is the resource annotation instance value this reconciler instance filters on.
+	// The annotations key are:
+	{{- range $class := .classes}}
+	//   {{$class}}
+	{{- end}}
 	classValue string
 	{{end}}
 }
 
-// Check that our Reconciler implements controller.Reconciler
+// Check that our Reconciler implements controller.Reconciler.
 var _ controller.Reconciler = (*reconcilerImpl)(nil)
 // Check that our generated Reconciler is always LeaderAware.
 var _ {{.reconcilerLeaderAware|raw}}  = (*reconcilerImpl)(nil)
@@ -324,7 +347,6 @@ func NewReconciler(ctx {{.contextContext|raw}}, logger *{{.zapSugaredLogger|raw}
 	if _, ok := r.({{.reconcilerLeaderAware|raw}}); ok {
 		logger.Fatalf("%T implements the incorrect LeaderAware interface. Promote() should not take an argument as genreconciler handles the enqueuing automatically.", r)
 	}
-	// TODO: Consider validating when folks implement ReadOnlyFinalizer, but not Finalizer.
 
 	rec := &reconcilerImpl{
 		LeaderAwareFuncs: {{.reconcilerLeaderAwareFuncs|raw}}{
@@ -363,6 +385,9 @@ func NewReconciler(ctx {{.contextContext|raw}}, logger *{{.zapSugaredLogger|raw}
 			rec.skipStatusUpdates = true
 		}
 		{{- end}}
+		if opts.DemoteFunc != nil {
+			rec.DemoteFunc = opts.DemoteFunc
+		}
 	}
 
 	return rec
@@ -407,20 +432,35 @@ func (r *reconcilerImpl) Reconcile(ctx {{.contextContext|raw}}, key string) erro
 	original, err := getter.Get(s.name)
 
 	if {{.apierrsIsNotFound|raw}}(err) {
-		// The resource may no longer exist, in which case we stop processing.
+		// The resource may no longer exist, in which case we stop processing and call
+		// the ObserveDeletion handler if appropriate.
 		logger.Debugf("Resource %q no longer exists", key)
+		if del, ok := r.reconciler.({{.reconcilerOnDeletionInterface|raw}}); ok {
+			return del.ObserveDeletion(ctx, {{.typesNamespacedName|raw}}{
+				Namespace: s.namespace,
+				Name: s.name,
+			})
+		}
 		return nil
 	} else if err != nil {
 		return err
 	}
-	{{if .hasClass}}
+
+{{if len .classes | eq 1 }}
 	if classValue, found := original.GetAnnotations()[ClassAnnotationKey]; !found || classValue != r.classValue {
 		logger.Debugw("Skip reconciling resource, class annotation value does not match reconciler instance value.",
 			zap.String("classKey", ClassAnnotationKey),
 			zap.String("issue", classValue+"!="+r.classValue))
 		return nil
 	}
-	{{end}}
+{{else if gt (len .classes) 1 }}
+	if classValue, found := lookupClass(original.GetAnnotations()); !found || classValue != r.classValue {
+		logger.Debugw("Skip reconciling resource, class annotation value does not match reconciler instance value.",
+			zap.Strings("classKeys", ClassAnnotationKeys),
+			zap.String("issue", classValue+"!="+r.classValue))
+		return nil
+	}
+{{end}}
 
 	// Don't modify the informers copy.
 	resource := original.DeepCopy()
@@ -462,7 +502,7 @@ func (r *reconcilerImpl) Reconcile(ctx {{.contextContext|raw}}, key string) erro
 			return {{.fmtErrorf|raw}}("failed to clear finalizers: %w", err)
 		}
 
-	case {{.doObserveKind|raw}}, {{.doObserveFinalizeKind|raw}}:
+	case {{.doObserveKind|raw}}:
 		// Observe any changes to this resource, since we are not the leader.
 		reconcileEvent = do(ctx, resource)
 
@@ -484,7 +524,7 @@ func (r *reconcilerImpl) Reconcile(ctx {{.contextContext|raw}}, key string) erro
 		// the elected leader is expected to write modifications.
 		logger.Warn("Saw status changes when we aren't the leader!")
 	default:
-		if err = r.updateStatus(ctx, original, resource); err != nil {
+		if err = r.updateStatus(ctx, logger, original, resource); err != nil {
 			logger.Warnw("Failed to update resource status", zap.Error(err))
 			r.Recorder.Eventf(resource, {{.corev1EventTypeWarning|raw}}, "UpdateFailed",
 				"Failed to update status for %q: %v", resource.Name, err)
@@ -498,7 +538,7 @@ func (r *reconcilerImpl) Reconcile(ctx {{.contextContext|raw}}, key string) erro
 		var event *{{.reconcilerReconcilerEvent|raw}}
 		if reconciler.EventAs(reconcileEvent, &event) {
 			logger.Infow("Returned an event", zap.Any("event", reconcileEvent))
-			r.Recorder.Eventf(resource, event.EventType, event.Reason, event.Format, event.Args...)
+			r.Recorder.Event(resource, event.EventType, event.Reason, event.Error())
 
 			// the event was wrapped inside an error, consider the reconciliation as failed
 			if _, isEvent := reconcileEvent.(*reconciler.ReconcilerEvent); !isEvent {
@@ -507,8 +547,14 @@ func (r *reconcilerImpl) Reconcile(ctx {{.contextContext|raw}}, key string) erro
 			return nil
 		}
 
-		logger.Errorw("Returned an error", zap.Error(reconcileEvent))
-		r.Recorder.Event(resource, {{.corev1EventTypeWarning|raw}}, "InternalError", reconcileEvent.Error())
+		if {{ .controllerIsSkipKey|raw }}(reconcileEvent) {
+			// This is a wrapped error, don't emit an event.
+		} else if ok, _ := {{ .controllerIsRequeueKey|raw }}(reconcileEvent); ok {
+			// This is a wrapped error, don't emit an event.
+		} else {
+			logger.Errorw("Returned an error", zap.Error(reconcileEvent))
+			r.Recorder.Event(resource, {{.corev1EventTypeWarning|raw}}, "InternalError", reconcileEvent.Error())
+		}
 		return reconcileEvent
 	}
 
@@ -517,7 +563,7 @@ func (r *reconcilerImpl) Reconcile(ctx {{.contextContext|raw}}, key string) erro
 `
 
 var reconcilerStatusFactory = `
-func (r *reconcilerImpl) updateStatus(ctx {{.contextContext|raw}}, existing *{{.type|raw}}, desired *{{.type|raw}}) error {
+func (r *reconcilerImpl) updateStatus(ctx {{.contextContext|raw}}, logger *{{.zapSugaredLogger|raw}}, existing *{{.type|raw}}, desired *{{.type|raw}}) error {
 	existing = existing.DeepCopy()
 	return {{.reconcilerRetryUpdateConflicts|raw}}(func(attempts int) (err error) {
 		// The first iteration tries to use the injectionInformer's state, subsequent attempts fetch the latest state via API.
@@ -534,12 +580,14 @@ func (r *reconcilerImpl) updateStatus(ctx {{.contextContext|raw}}, existing *{{.
 		}
 
 		// If there's nothing to update, just return.
-		if {{.reflectDeepEqual|raw}}(existing.Status, desired.Status) {
+		if {{.equalitySemantic|raw}}.DeepEqual(existing.Status, desired.Status) {
 			return nil
 		}
 
-		if diff, err := {{.kmpSafeDiff|raw}}(existing.Status, desired.Status); err == nil && diff != "" {
-			{{.loggingFromContext|raw}}(ctx).Debug("Updating status with: ", diff)
+		if logger.Desugar().Core().Enabled(zapcore.DebugLevel) {
+			if diff, err := {{.kmpSafeDiff|raw}}(existing.Status, desired.Status); err == nil && diff != "" {
+				logger.Debug("Updating status with: ", diff)
+			}
 		}
 
 		existing.Status = desired.Status
@@ -559,25 +607,14 @@ var reconcilerFinalizerFactory = `
 // updateFinalizersFiltered will update the Finalizers of the resource.
 // TODO: this method could be generic and sync all finalizers. For now it only
 // updates defaultFinalizerName or its override.
-func (r *reconcilerImpl) updateFinalizersFiltered(ctx {{.contextContext|raw}}, resource *{{.type|raw}}) (*{{.type|raw}}, error) {
-	{{if .nonNamespaced}}
-	getter := r.Lister
-	{{else}}
-	getter := r.Lister.{{.type|apiGroup}}(resource.Namespace)
-	{{end}}
-	actual, err := getter.Get(resource.Name)
-	if err != nil {
-		return resource, err
-	}
-
+func (r *reconcilerImpl) updateFinalizersFiltered(ctx {{.contextContext|raw}}, resource *{{.type|raw}}, desiredFinalizers {{.setsString|raw}}) (*{{.type|raw}}, error) {
 	// Don't modify the informers copy.
-	existing := actual.DeepCopy()
+	existing := resource.DeepCopy()
 
 	var finalizers []string
 
 	// If there's nothing to update, just return.
 	existingFinalizers := {{.setsNewString|raw}}(existing.Finalizers...)
-	desiredFinalizers := {{.setsNewString|raw}}(resource.Finalizers...)
 
 	if desiredFinalizers.Has(r.finalizerName) {
 		if existingFinalizers.Has(r.finalizerName) {
@@ -637,10 +674,8 @@ func (r *reconcilerImpl) setFinalizerIfFinalizer(ctx {{.contextContext|raw}}, re
 		finalizers.Insert(r.finalizerName)
 	}
 
-	resource.Finalizers = finalizers.List()
-
 	// Synchronize the finalizers filtered by r.finalizerName.
-	return r.updateFinalizersFiltered(ctx, resource)
+	return r.updateFinalizersFiltered(ctx, resource, finalizers)
 }
 
 func (r *reconcilerImpl) clearFinalizer(ctx {{.contextContext|raw}}, resource *{{.type|raw}}, reconcileEvent {{.reconcilerEvent|raw}}) (*{{.type|raw}}, error) {
@@ -664,10 +699,8 @@ func (r *reconcilerImpl) clearFinalizer(ctx {{.contextContext|raw}}, resource *{
 		finalizers.Delete(r.finalizerName)
 	}
 
-	resource.Finalizers = finalizers.List()
-
 	// Synchronize the finalizers filtered by r.finalizerName.
-	return r.updateFinalizersFiltered(ctx, resource)
+	return r.updateFinalizersFiltered(ctx, resource, finalizers)
 }
 
 `
