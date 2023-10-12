@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-apiVersion: admissionregistration.k8s.io/v1beta1
+apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
   name: defaulting.webhook.maths.tableflip.dev
@@ -20,15 +20,16 @@ metadata:
     maths.tableflip.dev/release: devel
 webhooks:
 - admissionReviewVersions:
-  - v1beta1
+  - v1
   clientConfig:
     service:
       name: webhook
       namespace: maths
   failurePolicy: Fail
+  sideEffects: None
   name: defaulting.webhook.maths.tableflip.dev
 ---
-apiVersion: admissionregistration.k8s.io/v1beta1
+apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
   name: validation.webhook.maths.tableflip.dev
@@ -36,15 +37,16 @@ metadata:
     maths.tableflip.dev/release: devel
 webhooks:
 - admissionReviewVersions:
-  - v1beta1
+  - v1
   clientConfig:
     service:
       name: webhook
       namespace: maths
   failurePolicy: Fail
+  sideEffects: None
   name: validation.webhook.maths.tableflip.dev
 ---
-apiVersion: admissionregistration.k8s.io/v1beta1
+apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
   name: config.webhook.maths.tableflip.dev
@@ -52,12 +54,13 @@ metadata:
     serving.knative.dev/release: devel
 webhooks:
 - admissionReviewVersions:
-  - v1beta1
+  - v1
   clientConfig:
     service:
       name: webhook
       namespace: maths
   failurePolicy: Fail
+  sideEffects: None
   name: config.webhook.maths.tableflip.dev
   namespaceSelector:
     matchExpressions:
